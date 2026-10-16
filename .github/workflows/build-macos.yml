@@ -3,6 +3,12 @@ name: Build LinkIt Fork (macOS arm64)
 on:
   push:
     branches: [main]
+    paths:
+      - '.github/workflows/build-macos.yml'
+      - 'scripts/**'
+      - 'upstream/macos/**'
+      - 'upstream/scripts/**'
+      - 'upstream/assets/**'
   workflow_dispatch:
 
 permissions:
@@ -13,31 +19,35 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 30
     steps:
-      - name: Checkout fork patches
+      - name: Checkout preserved fork source
         uses: actions/checkout@v4
 
-      - name: Fetch pinned original Linkit source
+      - name: Verify archived macOS source is available locally
         shell: bash
         run: |
-          git clone https://github.com/kalki-kgp/Linkit.git upstream
-          git -C upstream checkout --detach 4caea673f0fd827ba6ffb754895df9a7f0694dc8
-          git -C upstream rev-parse HEAD
+          set -euo pipefail
+          test -f UPSTREAM_SNAPSHOT_COMMIT
+          test "$(cat UPSTREAM_SNAPSHOT_COMMIT)" = "4caea673f0fd827ba6ffb754895df9a7f0694dc8"
+          test -f upstream/macos/Package.swift
+          test -f upstream/scripts/build-macos-app.sh
+          test -f upstream/macos/Resources/Linkit.icns
+          echo "Building from own GitHub repository; no upstream clone or fetch"
 
-      - name: Apply macOS visual fixes
+      - name: Apply our macOS visual fixes
         run: python3 scripts/apply_macos_ui_fixes.py upstream
 
-      - name: Install Pillow for icon processing
+      - name: Install Python and Pillow for the preserved original icon
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Regenerate transparent macOS icon
+      - name: Regenerate the transparent original macOS icon
         shell: bash
         run: |
           python -m pip install --disable-pip-version-check Pillow
           python scripts/fix_mac_icon.py upstream
 
-      - name: Publish original-icon preview
+      - name: Preserve icon preview as build artifact
         uses: actions/upload-artifact@v4
         with:
           name: LinkIt-Original-Icon-Preview
@@ -48,26 +58,27 @@ jobs:
       - name: Test and build natively for Apple Silicon
         shell: bash
         run: |
+          set -euo pipefail
           test "$(uname -m)" = arm64
-          cd upstream/macos
-          swift test
-          cd ..
+          (cd upstream/macos && swift test)
           LINKIT_VERSION=0.9.6 LINKIT_BUILD=962 \
             LINKIT_UPDATE_MANIFEST_URL=https://github.com/landco-debug/LinkIt-Fork/releases/latest/download/linkit-macos-update.json \
-            ./scripts/build-macos-app.sh
-          test -d dist/Linkit.app
-          /usr/bin/codesign --verify --deep --strict --verbose=2 dist/Linkit.app
-          /usr/bin/codesign -dv --verbose=2 dist/Linkit.app
+            ./upstream/scripts/build-macos-app.sh
+          test -d upstream/dist/Linkit.app
+          /usr/bin/codesign --verify --deep --strict --verbose=2 upstream/dist/Linkit.app
 
-      - name: Package .app without altering its contents
+      - name: Package Mac app
         shell: bash
         run: |
           ditto -c -k --sequesterRsrc --keepParent upstream/dist/Linkit.app LinkIt-Fork-macOS-arm64.zip
+          shasum -a 256 LinkIt-Fork-macOS-arm64.zip > LinkIt-Fork-macOS-arm64.zip.sha256
 
-      - name: Publish downloadable build artifact
+      - name: Publish Mac app and checksum
         uses: actions/upload-artifact@v4
         with:
           name: LinkIt-Fork-macOS-arm64
-          path: LinkIt-Fork-macOS-arm64.zip
+          path: |
+            LinkIt-Fork-macOS-arm64.zip
+            LinkIt-Fork-macOS-arm64.zip.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
