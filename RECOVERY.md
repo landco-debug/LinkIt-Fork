@@ -18,6 +18,16 @@ git clone https://github.com/landco-debug/LinkIt-Fork.git
 
 For a completely air-gapped build, external compiler/SDK versions and Gradle/Maven dependencies also need to be cached or mirrored in advance. This source archive does not contain macOS/Xcode, the Android SDK, the Gradle distribution ZIP or all Maven artifacts. The upstream Gradle wrapper JAR and version/hash configuration *are* preserved.
 
+## Permanent unmodified installer copies (verified hashes)
+
+The [recovery Release](https://github.com/landco-debug/LinkIt-Fork/releases/tag/recovery-source-2026-10-16) also contains:
+- `LinkIt-Fork-macOS-arm64.zip`: our working macOS fork binary, built from **our own** source tree and retained without Actions artifact expiry.
+- `Linkit-v0.9.6-OFFICIAL-Android.apk`: the **unmodified original author's signed APK**; this is an immediately reusable Android installer and retains the author's signature. Its SHA-256 was verified to match the original official GitHub v0.9.6 Release.
+- `Linkit-v0.9.6-OFFICIAL-macOS.zip`: the unmodified original Mac installer (also verified).
+- Corresponding SHA-256 checksum files.
+
+For recovering the existing phone installation, retaining that exact signed original Android APK is preferable to replacing it with a differently signed debug APK. It is **not** the source-built Android fork. You can still build an Android fork from `upstream/android` using our own key, but an in-place upgrade from the author's signed APK using a different signature cannot be assumed.
+
 ## GitHub Actions: no original source required
 
 Go to **Actions** in this repository:
