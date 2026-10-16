@@ -65,6 +65,21 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+        <!-- Shown in Android's floating text-selection menu (Copy / Select all / ...). -->
+        <activity
+            android:name=".TextSelectionActivity"
+            android:exported="true"
+            android:label="Linkit"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/AppTheme.Invisible">
+            <intent-filter>
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
         <activity
             android:name=".ClipboardActionActivity"
             android:exported="false"
