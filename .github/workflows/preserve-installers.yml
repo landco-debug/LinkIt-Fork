@@ -1,0 +1,56 @@
+name: Preserve exact installers in permanent recovery release
+
+on:
+  push:
+    paths:
+      - '.github/workflows/preserve-installers.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  preserve:
+    if: github.repository == 'landco-debug/LinkIt-Fork'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: recovery-source-2026-10-16
+    steps:
+      - name: Get independently built macOS fork from verified GitHub Actions run
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloads/mac
+          gh run download 38929990624 --repo "$GITHUB_REPOSITORY" --name LinkIt-Fork-macOS-arm64 --dir downloads/mac
+          (cd downloads/mac && sha256sum --check LinkIt-Fork-macOS-arm64.zip.sha256)
+          test -s downloads/mac/LinkIt-Fork-macOS-arm64.zip
+
+      - name: Preserve unmodified official v0.9.6 installables
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --silent --show-error \
+            'https://github.com/kalki-kgp/Linkit/releases/download/v0.9.6/linkit-release.apk' \
+            -o Linkit-v0.9.6-OFFICIAL-Android.apk
+          curl --fail --location --retry 3 --silent --show-error \
+            'https://github.com/kalki-kgp/Linkit/releases/download/v0.9.6/linkit-macos.zip' \
+            -o Linkit-v0.9.6-OFFICIAL-macOS.zip
+          echo 'd4582c1989ac679a29956ad21fd32d610c86d5dead12114eb4bb6fd07da9e11a  Linkit-v0.9.6-OFFICIAL-Android.apk' | sha256sum --check
+          echo '505a5067e98cafc8c53f3888106c8910cbea362d86737ebc6495f300c86a881a  Linkit-v0.9.6-OFFICIAL-macOS.zip' | sha256sum --check
+          sha256sum Linkit-v0.9.6-OFFICIAL-Android.apk Linkit-v0.9.6-OFFICIAL-macOS.zip > Linkit-v0.9.6-OFFICIAL-SHA256SUMS.txt
+
+      - name: Publish perpetual copies of original installers and our Mac fork
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            downloads/mac/LinkIt-Fork-macOS-arm64.zip \
+            downloads/mac/LinkIt-Fork-macOS-arm64.zip.sha256 \
+            Linkit-v0.9.6-OFFICIAL-Android.apk \
+            Linkit-v0.9.6-OFFICIAL-macOS.zip \
+            Linkit-v0.9.6-OFFICIAL-SHA256SUMS.txt \
+            --clobber
