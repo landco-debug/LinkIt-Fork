@@ -1,0 +1,62 @@
+name: Snapshot original LinkIt source (one-time preservation)
+
+on:
+  push:
+    paths:
+      - '.github/workflows/archive-upstream.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linkit-source-archive
+  cancel-in-progress: false
+
+jobs:
+  preserve-source:
+    if: github.repository == 'landco-debug/LinkIt-Fork'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out our fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preserve original sources at a fixed commit
+        shell: bash
+        env:
+          UPSTREAM_REPO: https://github.com/kalki-kgp/Linkit.git
+          UPSTREAM_SHA: 4caea673f0fd827ba6ffb754895df9a7f0694dc8
+        run: |
+          set -euo pipefail
+          if test -f upstream/macos/Package.swift && test -f upstream/android/gradlew; then
+            echo 'Already preserved: refusing to overwrite the snapshot'
+            exit 0
+          fi
+          test ! -e upstream || { echo 'Partial upstream directory already exists'; exit 1; }
+          git clone --quiet "$UPSTREAM_REPO" "$RUNNER_TEMP/original-linkit"
+          git -C "$RUNNER_TEMP/original-linkit" checkout --quiet --detach "$UPSTREAM_SHA"
+          test "$(git -C "$RUNNER_TEMP/original-linkit" rev-parse HEAD)" = "$UPSTREAM_SHA"
+          mkdir upstream
+          git -C "$RUNNER_TEMP/original-linkit" archive "$UPSTREAM_SHA" | tar -xf - -C upstream
+          test -f upstream/android/gradlew
+          test -f upstream/android/app/build.gradle.kts
+          test -f upstream/macos/Package.swift
+          test -f upstream/LICENSE
+          printf '%s\n' "$UPSTREAM_SHA" > UPSTREAM_SNAPSHOT_COMMIT
+          git add -f upstream UPSTREAM_SNAPSHOT_COMMIT
+          echo "Files preserved: $(git ls-files upstream | wc -l)"
+          echo "Source size: $(du -sh upstream)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Preserve complete pinned LinkIt source for macOS and Android'
+          git push origin HEAD:main
+
+      - name: Show snapshot verification
+        if: always()
+        shell: bash
+        run: |
+          git status --short
+          test -e upstream/macos/Package.swift && test -e upstream/android/gradlew && echo 'Mac and Android source present in workflow working tree' || true
