@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Remove the opaque black square from the original macOS app icon.
+"""Restore Linkit's ORIGINAL dark phone-to-laptop macOS icon without its black square.
 
-Requires Pillow and Apple's iconutil, on a macOS GitHub Actions runner.
+The original icon is macos/Resources/Linkit.icns. DO NOT use
+assets/app-icon/linkit-app-icon-source.png: it is a different blue circular logo.
 """
 from pathlib import Path
-from PIL import Image, ImageChops, ImageDraw
+from PIL import Image, ImageChops, ImageFilter
 import subprocess
 import sys
 import tempfile
@@ -22,67 +23,88 @@ ICON_VARIANTS = {
     "icon_512x512@2x.png": 1024,
 }
 
-
-def prepare_icon(img: Image.Image) -> Image.Image:
+def restore_original_icon(img: Image.Image) -> Image.Image:
     img = img.convert("RGBA")
-    rgb = img.convert("RGB")
-    bg = rgb.getpixel((0, 0))
-    diff = ImageChops.difference(rgb, Image.new("RGB", img.size, bg))
-    channel = ImageChops.lighter(
-        ImageChops.lighter(diff.getchannel("R"), diff.getchannel("G")),
-        diff.getchannel("B"),
-    )
-    visible = channel.point(lambda value: 255 if value > 24 else 0)
-    bbox = visible.getbbox()
-    if bbox is None:
-        raise RuntimeError("Icon detection failed: no artwork found")
-    left, top, right, bottom = bbox
     w, h = img.size
-    # The artwork is a rounded square inset in a solid black square.
-    # Only auto-crop when the detected matte is plausibly narrow.
-    if 0 < left < w * 0.15 and 0 < top < h * 0.15 and right > w * 0.85 and bottom > h * 0.85:
-        side = max(right - left, bottom - top)
-        cx, cy = (left + right) / 2, (top + bottom) / 2
-        crop = (
-            int(round(cx - side / 2)), int(round(cy - side / 2)),
-            int(round(cx + side / 2)), int(round(cy + side / 2)),
-        )
-        img = img.crop(crop)
-        print(f"Removed opaque icon frame: {crop}, background RGB={bg}")
+    if w < 256 or h < 256:
+        raise RuntimeError(f"Unexpected original icon resolution: {img.size}")
+
+    # Regression guard: the previous release mistakenly used the blue round logo.
+    top_rgb = img.getpixel((w // 2, h // 5))
+    print(f"ORIGINAL icon {img.size} interior/top={top_rgb} corner={img.getpixel((0,0))}")
+    if top_rgb[2] > 130 and top_rgb[2] > 1.9 * (top_rgb[0] + 1):
+        raise RuntimeError("Wrong blue icon source instead of original dark design")
+
+    if img.getpixel((0, 0))[3] < 32:
+        alpha = img.getchannel("A")
+        bounds = alpha.point(lambda a: 255 if a > 24 else 0).getbbox()
+        print("Original corners already transparent")
     else:
-        print(f"No safe matte crop detected ({bbox}); applying alpha mask only")
+        # Remove only the external solid black rectangle. Preserve all interior
+        # dark artwork, reflections and cyan/green device-transfer illustration.
+        matte_color = img.getpixel((0, 0))[:3]
+        rgb = img.convert("RGB")
+        diff = ImageChops.difference(rgb, Image.new("RGB", img.size, matte_color))
+        important = ImageChops.lighter(
+            ImageChops.lighter(diff.getchannel("R"), diff.getchannel("G")),
+            diff.getchannel("B")
+        )
+        foreground = important.point(lambda d: 255 if d > 16 else 0)
+        bounds = foreground.getbbox()
+        if bounds is None:
+            raise RuntimeError("Cannot separate original artwork from black matte")
+        fp = foreground.load()
+        matte_mask = Image.new("L", img.size, 0)
+        mp = matte_mask.load()
+        for y in range(h):
+            lo, hi = None, None
+            for x in range(w):
+                if fp[x, y]:
+                    if lo is None:
+                        lo = x
+                    hi = x
+            if lo is not None:
+                for x in range(lo, hi + 1):
+                    mp[x, y] = 255
+        img.putalpha(matte_mask.filter(ImageFilter.GaussianBlur(0.6)))
+        print(f"Removed black square matte; foreground={bounds}")
+    if bounds is None:
+        raise RuntimeError("Empty original icon")
+    left, top, right, bottom = bounds
+    if right - left < 0.48 * w or bottom - top < 0.48 * h:
+        raise RuntimeError(f"Suspicious artwork bounding box: {bounds}")
 
-    size = 1024
-    img = img.resize((size, size), Image.Resampling.LANCZOS)
-    mask = Image.new("L", (size * 2, size * 2), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.rounded_rectangle(
-        (0, 0, size * 2 - 1, size * 2 - 1),
-        radius=int(size * 2 * 0.225),
-        fill=255,
+    side = max(right - left, bottom - top) * 1.01
+    cx, cy = (left + right) / 2, (top + bottom) / 2
+    trimmed = img.crop((
+        round(cx - side / 2), round(cy - side / 2),
+        round(cx + side / 2), round(cy + side / 2)
+    ))
+    # MacOS 15 app icon optical scale: 822/1024 prevents oversized Launchpad icon.
+    size = 822
+    canvas = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+    canvas.alpha_composite(
+        trimmed.resize((size, size), Image.Resampling.LANCZOS),
+        ((1024 - size) // 2, (1024 - size) // 2)
     )
-    mask = mask.resize((size, size), Image.Resampling.LANCZOS)
-    img.putalpha(ImageChops.multiply(mask, img.getchannel("A")))
-    return img
-
+    return canvas
 
 def main(root: Path) -> None:
-    source = root / "assets/app-icon/linkit-app-icon-source.png"
     destination = root / "macos/Resources/Linkit.icns"
-    if not source.is_file() or not destination.is_file():
-        raise FileNotFoundError(f"Upstream icon files missing: {source} or {destination}")
-    icon = prepare_icon(Image.open(source))
+    if not destination.is_file():
+        raise FileNotFoundError(f"Missing original icon: {destination}")
+    # Extract source before replacing it with rebuilt transparent ICNS.
+    with Image.open(destination) as original:
+        icon = restore_original_icon(original.copy())
+    preview = root / "linkit-icon-preview.png"
+    icon.save(preview)
     with tempfile.TemporaryDirectory(prefix="linkit-icon-") as tmp:
         folder = Path(tmp) / "Linkit.iconset"
         folder.mkdir()
         for name, side in ICON_VARIANTS.items():
             icon.resize((side, side), Image.Resampling.LANCZOS).save(folder / name)
-        subprocess.run(
-            ["iconutil", "-c", "icns", str(folder), "-o", str(destination)],
-            check=True,
-        )
-    print(f"Rebuilt transparent rounded macOS icon: {destination}")
-
+        subprocess.run(["iconutil", "-c", "icns", str(folder), "-o", str(destination)], check=True)
+    print(f"Original dark artwork restored to: {destination}; preview: {preview}")
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
