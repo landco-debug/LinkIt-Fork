@@ -80,6 +80,7 @@ final class PanelViewModel: ObservableObject {
     var onHangUp: () -> Void = {}
     var onOpenDropFolder: () -> Void = {}
     var onOpenRecent: (String) -> Void = { _ in }
+    var onCopyRecent: ([String]) -> Bool = { _ in false }
     var onCancelTransfer: () -> Void = {}
     var onOpenSettings: () -> Void = {}
     var onQuit: () -> Void = {}

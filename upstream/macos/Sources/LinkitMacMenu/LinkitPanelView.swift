@@ -13,6 +13,8 @@ struct LinkitPanelView: View {
     @ObservedObject var model: PanelViewModel
     // Re-render the popover when the user changes the accent color.
     @ObservedObject private var prefs = Preferences.shared
+    @State private var selectedRecentIDs: Set<String> = []
+    @State private var copyFeedback: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -102,30 +104,108 @@ struct LinkitPanelView: View {
 
     private var recentTransfers: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("RECENT")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-            ForEach(model.recentTransfers.prefix(5)) { row in
-                let fileURL = row.savedPath.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
-                HStack(spacing: 8) {
-                    Image(systemName: row.direction == .outgoing ? "arrow.up.circle" : "arrow.down.circle")
-                        .foregroundStyle(.secondary)
-                        .font(.system(size: 12))
-                    Text(row.filename)
-                        .font(.system(size: 12))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 4)
-                    Text(row.status)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
+            HStack {
+                Text("RECENT")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if !selectedURLs.isEmpty {
+                    Button {
+                        copyFiles(selectedURLs)
+                    } label: {
+                        Label("Copy \(selectedURLs.count)", systemImage: "doc.on.doc")
+                            .font(.system(size: 10.5, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copy selected files to the Mac clipboard")
                 }
-                .contentShape(Rectangle())
-                .overlay(FileDragOverlay(url: fileURL) {
-                    if let path = row.savedPath { model.onOpenRecent(path) }
-                })
+            }
+            ForEach(model.recentTransfers.prefix(8)) { row in
+                let url = receivedURL(for: row)
+                HStack(spacing: 7) {
+                    if url != nil {
+                        Button {
+                            copyFeedback = nil
+                            if selectedRecentIDs.contains(row.id) {
+                                selectedRecentIDs.remove(row.id)
+                            } else {
+                                selectedRecentIDs.insert(row.id)
+                            }
+                        } label: {
+                            Image(systemName: selectedRecentIDs.contains(row.id) ? "checkmark.square.fill" : "square")
+                                .font(.system(size: 13))
+                                .foregroundStyle(selectedRecentIDs.contains(row.id) ? Brand.amber : .secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Select file for copying or dragging together with other files")
+                    } else {
+                        Image(systemName: "square")
+                            .font(.system(size: 13))
+                            .hidden()
+                    }
+
+                    HStack(spacing: 6) {
+                        Image(systemName: row.direction == .outgoing ? "arrow.up.circle" : "arrow.down.circle")
+                            .foregroundStyle(.secondary)
+                            .font(.system(size: 12))
+                        Text(row.filename)
+                            .font(.system(size: 12))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 3)
+                        Text(row.status)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .contentShape(Rectangle())
+                    .overlay(FileDragOverlay(urls: dragURLs(for: row)) {
+                        if let path = row.savedPath { model.onOpenRecent(path) }
+                    })
+                    .frame(height: 23)
+
+                    if let url {
+                        Button {
+                            copyFiles([url])
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Copy this file to the Mac clipboard")
+                    }
+                }
+            }
+            if let copyFeedback {
+                Text(copyFeedback)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func receivedURL(for row: RecentTransferRow) -> URL? {
+        guard row.status == "complete", let path = row.savedPath, !path.isEmpty else { return nil }
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
+    private var selectedURLs: [URL] {
+        model.recentTransfers.prefix(8)
+            .filter { selectedRecentIDs.contains($0.id) }
+            .compactMap(receivedURL(for:))
+    }
+
+    private func dragURLs(for row: RecentTransferRow) -> [URL] {
+        guard let url = receivedURL(for: row) else { return [] }
+        return selectedRecentIDs.contains(row.id) && !selectedURLs.isEmpty ? selectedURLs : [url]
+    }
+
+    private func copyFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        copyFeedback = model.onCopyRecent(urls.map(\.path))
+            ? (urls.count == 1 ? "Copied to clipboard" : "Copied \(urls.count) files to clipboard")
+            : "Couldn't copy files"
     }
 
     // MARK: Footer

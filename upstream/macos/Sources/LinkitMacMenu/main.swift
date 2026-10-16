@@ -97,6 +97,7 @@ final class LinkitMenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
     private var settingsWindow: NSWindow?
     private var popover: NSPopover?
     private var popoverClosedAt = Date.distantPast
+    private var pendingRecentReveal: DispatchWorkItem?
     private var transferStripClearWorkItem: DispatchWorkItem?
     private var qrWindow: NSWindow?
     private var retiredWindows: [NSWindow] = []
@@ -354,9 +355,9 @@ final class LinkitMenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
         panelViewModel.clipboardSyncEnabled = clipboardSyncEnabled
         panelViewModel.doNotDisturbUntil = prefs.isDoNotDisturbActive ? prefs.doNotDisturbUntil : nil
         panelViewModel.phone = panelPhoneState()
-        panelViewModel.recentTransfers = app.recentTransfers(limit: 8).enumerated().map { index, entry in
+        panelViewModel.recentTransfers = app.recentTransfers(limit: 8).map { entry in
             RecentTransferRow(
-                id: "\(index)-\(entry.filename)",
+                id: entry.transferId,
                 filename: entry.filename,
                 status: entry.status,
                 savedPath: entry.savedPath,
@@ -409,6 +410,9 @@ final class LinkitMenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
         panelViewModel.onOpenRecent = { [weak self] path in
             self?.openRecentTransferPath(path)
         }
+        panelViewModel.onCopyRecent = { [weak self] paths in
+            self?.copyRecentFiles(paths) ?? false
+        }
         panelViewModel.onCancelTransfer = { [weak self] in self?.cancelCurrentTransfer() }
         panelViewModel.onOpenSettings = { [weak self] in self?.closePopover(); self?.showSettings() }
         panelViewModel.onQuit = { [weak self] in self?.quit() }
@@ -425,29 +429,43 @@ final class LinkitMenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
     }
 
     private func togglePopover() {
-        guard let button = statusItem?.button else { return }
         if let popover, popover.isShown {
             popover.performClose(nil)
             return
         }
-        // The transient popover dismisses on the click that re-opens it; this
-        // guard stops the same click from immediately re-showing it.
         if Date().timeIntervalSince(popoverClosedAt) < 0.25 { return }
+        showRecentPopover(activateApp: true)
+    }
+
+    private func showRecentPopover(activateApp: Bool) {
+        guard let button = statusItem?.button else { return }
         refreshPanel()
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.animates = true
-        popover.delegate = self
+        if popover?.isShown == true { return }
+        let nextPopover = NSPopover()
+        // Transient means no timeout; a click outside closes it.
+        nextPopover.behavior = .transient
+        nextPopover.animates = true
+        nextPopover.delegate = self
         let host = NSHostingController(rootView: LinkitPanelView(model: panelViewModel))
         host.sizingOptions = [.preferredContentSize]
-        popover.contentViewController = host
-        self.popover = popover
-        NSApp.activate(ignoringOtherApps: true)
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        // Make the popover its own key window immediately. Without this the backing
-        // vibrancy material renders in its washed-out "inactive" state until the
-        // first click inside the popover makes it key.
-        popover.contentViewController?.view.window?.makeKey()
+        nextPopover.contentViewController = host
+        popover = nextPopover
+        if activateApp { NSApp.activate(ignoringOtherApps: true) }
+        nextPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        if activateApp { nextPopover.contentViewController?.view.window?.makeKey() }
+    }
+
+    private func scheduleRecentReveal() {
+        pendingRecentReveal?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingRecentReveal = nil
+            // Never activate Linkit or steal the keyboard focus on background receipt.
+            self.showRecentPopover(activateApp: false)
+        }
+        pendingRecentReveal = work
+        // Group a series of file completions into one popover reveal.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
     }
 
     private func closePopover() {
@@ -574,7 +592,21 @@ final class LinkitMenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
     }
 
     private func openRecentTransferPath(_ path: String) {
+        guard FileManager.default.fileExists(atPath: path) else { return }
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
+    }
+
+    private func copyRecentFiles(_ paths: [String]) -> Bool {
+        let urls = paths.map { URL(fileURLWithPath: $0) }
+        guard !urls.isEmpty, urls.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }) else { return false }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        let copied = pasteboard.writeObjects(urls.map { $0 as NSURL })
+        if copied {
+            lastClipboardChangeCount = pasteboard.changeCount
+            lastClipboardText = nil
+        }
+        return copied
     }
 
     private func refreshAllDeviceStatus() {
@@ -982,9 +1014,9 @@ final class LinkitMenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
         settingsViewModel.canRelaunch = isRunningFromAppBundle
         settingsViewModel.logPath = app.logFile.path
         settingsViewModel.trustedCount = app.trustedDevices().count
-        settingsViewModel.recentTransfers = app.recentTransfers(limit: 10).enumerated().map { index, entry in
+        settingsViewModel.recentTransfers = app.recentTransfers(limit: 10).map { entry in
             RecentTransferRow(
-                id: "\(index)-\(entry.filename)",
+                id: entry.transferId,
                 filename: entry.filename,
                 status: entry.status,
                 savedPath: entry.savedPath,
@@ -1347,6 +1379,7 @@ final class LinkitMenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
             ) { [weak self] notification in
                 let filename = notification.userInfo?[LinkitTransferNotification.filenameKey] as? String
                 let size = notification.userInfo?[LinkitTransferNotification.sizeKey] as? Int64
+                self?.pendingRecentReveal?.cancel()
                 if let transferId = notification.userInfo?[LinkitTransferNotification.transferIdKey] as? String {
                     self?.transferStartedAtById[transferId] = Date()
                     self?.activeIncomingTransferId = transferId
@@ -1442,6 +1475,7 @@ final class LinkitMenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
                     )
                     self?.showTransientIcon(.success, tooltip: "Transfer complete")
                     self?.postReceivedNotification(userInfo: notification.userInfo)
+                    self?.scheduleRecentReveal()
                 } else if status == "canceled" {
                     self?.showTransferPanel(
                         state: LinkitTransferPanelState(
@@ -2684,36 +2718,34 @@ private final class DraggableFileView: NSView, NSDraggingSource {
 /// to the same AppKit `NSDraggingSource` approach the transfer panel uses. A click that
 /// doesn't move counts as a tap and calls `onOpen`; a click that drags begins a copy drag.
 struct FileDragOverlay: NSViewRepresentable {
-    let url: URL?
+    let urls: [URL]
     let onOpen: () -> Void
 
     func makeNSView(context: Context) -> FileDragRowView {
         let view = FileDragRowView()
-        view.fileURL = url
+        view.fileURLs = urls
         view.onOpen = onOpen
         return view
     }
 
     func updateNSView(_ view: FileDragRowView, context: Context) {
-        view.fileURL = url
+        view.fileURLs = urls
         view.onOpen = onOpen
     }
 }
 
 final class FileDragRowView: NSView, NSDraggingSource {
-    var fileURL: URL?
+    var fileURLs: [URL] = []
     var onOpen: (() -> Void)?
     private var mouseDownPoint: NSPoint?
     private var didDrag = false
 
-    // Pass clicks through when there's no file (disabled row); otherwise own the row so we
-    // can tell a tap from a drag.
     override func hitTest(_ point: NSPoint) -> NSView? {
-        fileURL == nil ? nil : super.hitTest(point)
+        fileURLs.isEmpty ? nil : super.hitTest(point)
     }
 
     override func resetCursorRects() {
-        if fileURL != nil { addCursorRect(bounds, cursor: .openHand) }
+        if !fileURLs.isEmpty { addCursorRect(bounds, cursor: .openHand) }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -2722,18 +2754,24 @@ final class FileDragRowView: NSView, NSDraggingSource {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let url = fileURL, let start = mouseDownPoint, !didDrag else { return }
+        guard !fileURLs.isEmpty, let start = mouseDownPoint, !didDrag else { return }
         let current = event.locationInWindow
         if abs(current.x - start.x) < 4, abs(current.y - start.y) < 4 { return }
         didDrag = true
-        let icon = NSWorkspace.shared.icon(forFile: url.path)
         let size = NSSize(width: 48, height: 48)
-        icon.size = size
-        let location = convert(event.locationInWindow, from: nil)
-        let frame = NSRect(x: location.x - size.width / 2, y: location.y - size.height / 2, width: size.width, height: size.height)
-        let item = NSDraggingItem(pasteboardWriter: url as NSURL)
-        item.setDraggingFrame(frame, contents: icon)
-        beginDraggingSession(with: [item], event: event, source: self)
+        let location = convert(current, from: nil)
+        let items: [NSDraggingItem] = fileURLs.enumerated().map { index, url in
+            let icon = NSWorkspace.shared.icon(forFile: url.path)
+            icon.size = size
+            let offset = CGFloat(min(index, 5)) * 4
+            let frame = NSRect(x: location.x - size.width / 2 + offset,
+                               y: location.y - size.height / 2 - offset,
+                               width: size.width, height: size.height)
+            let item = NSDraggingItem(pasteboardWriter: url as NSURL)
+            item.setDraggingFrame(frame, contents: icon)
+            return item
+        }
+        beginDraggingSession(with: items, event: event, source: self)
     }
 
     override func mouseUp(with event: NSEvent) {
