@@ -1,0 +1,38 @@
+name: Export Android APK signing tool
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/export-apksigner.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tool:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Export Google's official Android APK signer
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -n 1)"
+          test -n "$SDKMANAGER"
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "build-tools;36.0.0"
+          test -f "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar"
+          mkdir -p out
+          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" out/apksigner.jar
+          (cd out && sha256sum apksigner.jar > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Official-Android-apksigner-36.0.0
+          path: out/
+          retention-days: 7
