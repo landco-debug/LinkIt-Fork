@@ -2721,6 +2721,17 @@ struct FileDragOverlay: NSViewRepresentable {
     let urls: [URL]
     let onOpen: () -> Void
 
+    init(urls: [URL], onOpen: @escaping () -> Void) {
+        self.urls = urls
+        self.onOpen = onOpen
+    }
+
+    // Preserve the single-file initializer used in the existing Settings screen.
+    init(url: URL?, onOpen: @escaping () -> Void) {
+        self.urls = url.map { [$0] } ?? []
+        self.onOpen = onOpen
+    }
+
     func makeNSView(context: Context) -> FileDragRowView {
         let view = FileDragRowView()
         view.fileURLs = urls
