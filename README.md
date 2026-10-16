@@ -13,6 +13,18 @@ This repository contains **the complete original source snapshot of both platfor
 - `.github/workflows/build-android.yml` — independent Android build from `upstream/`.
 - `RECOVERY.md` — recovery procedure, signing details and limitations.
 
+## Permanent recovery release (not subject to Actions artifact expiration)
+
+**[Download the permanent recovery bundle and installers](https://github.com/landco-debug/LinkIt-Fork/releases/tag/recovery-source-2026-10-16)**. It contains:
+
+- `LinkIt-Fork-Full-Source-Recovery.zip` and a SHA-256 checksum — the **entire fork**, including the two preserved source trees.
+- `LinkIt-Fork-macOS-arm64.zip` and its SHA-256 checksum — our macOS arm64 app, verified built from our own repository.
+- `Linkit-v0.9.6-OFFICIAL-Android.apk` — **unmodified, original-author-signed Android APK**, with SHA-256 matched to the upstream published Release. This is the right APK to archive for restoring the already existing original Android app; it is **not an Android fork build**.
+- `Linkit-v0.9.6-OFFICIAL-macOS.zip` — unmodified official macOS installer, verified by the upstream SHA-256.
+- `Linkit-v0.9.6-OFFICIAL-SHA256SUMS.txt` — hashes of those official installers.
+
+Keep another copy of the ZIP/APK outside GitHub. Avoid installing a newly signed debug Android build over an existing official-release Android app; Android normally rejects signature mismatches.
+
 The original source repository can be deleted without deleting these checked-in source files. **Neither of the two build workflows clones the original LinkIt repository.** They still need operating-system toolchains and third-party dependencies from their respective normal package repositories.
 
 ## Cosmetic changes in the macOS app
