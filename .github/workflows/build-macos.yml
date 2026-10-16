@@ -1,0 +1,62 @@
+name: Build LinkIt Fork (macOS arm64)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout fork patches
+        uses: actions/checkout@v4
+
+      - name: Fetch pinned original Linkit source
+        shell: bash
+        run: |
+          git clone https://github.com/kalki-kgp/Linkit.git upstream
+          git -C upstream checkout --detach 4caea673f0fd827ba6ffb754895df9a7f0694dc8
+          git -C upstream rev-parse HEAD
+
+      - name: Apply macOS visual fixes
+        run: python3 scripts/apply_macos_ui_fixes.py upstream
+
+      - name: Install Pillow for icon processing
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Regenerate transparent macOS icon
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check Pillow
+          python scripts/fix_mac_icon.py upstream
+
+      - name: Test and build natively for Apple Silicon
+        shell: bash
+        run: |
+          test "$(uname -m)" = arm64
+          cd upstream/macos
+          swift test
+          cd ..
+          LINKIT_VERSION=0.9.6 LINKIT_BUILD=961 \
+            LINKIT_UPDATE_MANIFEST_URL=https://github.com/landco-debug/LinkIt-Fork/releases/latest/download/linkit-macos-update.json \
+            ./scripts/build-macos-app.sh
+          test -d dist/Linkit.app
+          /usr/bin/codesign --verify --strict dist/Linkit.app
+
+      - name: Package .app without altering its contents
+        shell: bash
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent upstream/dist/Linkit.app LinkIt-Fork-macOS-arm64.zip
+
+      - name: Publish downloadable build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkIt-Fork-macOS-arm64
+          path: LinkIt-Fork-macOS-arm64.zip
+          if-no-files-found: error
+          retention-days: 14
