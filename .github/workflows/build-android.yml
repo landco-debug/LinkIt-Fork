@@ -1,0 +1,73 @@
+name: Build LinkIt Fork (Android APK)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-android.yml'
+      - 'upstream/android/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout preserved source
+        uses: actions/checkout@v4
+
+      - name: Verify local Android snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f UPSTREAM_SNAPSHOT_COMMIT
+          test "$(cat UPSTREAM_SNAPSHOT_COMMIT)" = "4caea673f0fd827ba6ffb754895df9a7f0694dc8"
+          test -f upstream/android/app/build.gradle.kts
+          test -f upstream/android/gradlew
+          test -f upstream/android/gradle/wrapper/gradle-wrapper.jar
+          echo "No dependency on original LinkIt repository"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install required Android SDK packages
+        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Test and build Android from snapshot
+        working-directory: upstream/android
+        shell: bash
+        env:
+          LINKIT_ANDROID_VERSION_NAME: '0.9.6'
+          LINKIT_ANDROID_VERSION_CODE: '962'
+          LINKIT_ANDROID_UPDATE_MANIFEST_URL: https://github.com/landco-debug/LinkIt-Fork/releases/latest/download/linkit-android-update.json
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon testDebugUnitTest assembleDebug assembleRelease
+
+      - name: Collect APKs and SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/android
+          cp upstream/android/app/build/outputs/apk/debug/app-debug.apk artifacts/android/LinkIt-Fork-Android-debug.apk
+          cp upstream/android/app/build/outputs/apk/release/app-release-unsigned.apk artifacts/android/LinkIt-Fork-Android-release-unsigned.apk
+          (cd artifacts/android && sha256sum *.apk > SHA256SUMS.txt)
+          ls -lh artifacts/android
+
+      - name: Publish Android APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkIt-Fork-Android-APKs
+          path: artifacts/android/
+          if-no-files-found: error
+          retention-days: 30
