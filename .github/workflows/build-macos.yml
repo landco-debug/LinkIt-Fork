@@ -37,6 +37,14 @@ jobs:
           python -m pip install --disable-pip-version-check Pillow
           python scripts/fix_mac_icon.py upstream
 
+      - name: Publish original-icon preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkIt-Original-Icon-Preview
+          path: upstream/linkit-icon-preview.png
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Test and build natively for Apple Silicon
         shell: bash
         run: |
@@ -44,11 +52,12 @@ jobs:
           cd upstream/macos
           swift test
           cd ..
-          LINKIT_VERSION=0.9.6 LINKIT_BUILD=961 \
+          LINKIT_VERSION=0.9.6 LINKIT_BUILD=962 \
             LINKIT_UPDATE_MANIFEST_URL=https://github.com/landco-debug/LinkIt-Fork/releases/latest/download/linkit-macos-update.json \
             ./scripts/build-macos-app.sh
           test -d dist/Linkit.app
-          /usr/bin/codesign --verify --strict dist/Linkit.app
+          /usr/bin/codesign --verify --deep --strict --verbose=2 dist/Linkit.app
+          /usr/bin/codesign -dv --verbose=2 dist/Linkit.app
 
       - name: Package .app without altering its contents
         shell: bash
