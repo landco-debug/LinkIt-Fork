@@ -1,0 +1,69 @@
+name: Publish permanent recovery source archive
+
+on:
+  push:
+    paths:
+      - '.github/workflows/publish-recovery-backup.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  recovery-release:
+    if: github.repository == 'landco-debug/LinkIt-Fork'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RECOVERY_TAG: recovery-source-2026-10-16
+    steps:
+      - name: Checkout our independent source
+        uses: actions/checkout@v4
+
+      - name: Assert both platform trees exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f upstream/LICENSE
+          test -f upstream/macos/Package.swift
+          test -f upstream/android/gradlew
+          test -f UPSTREAM_SNAPSHOT_COMMIT
+          test -f scripts/apply_macos_ui_fixes.py
+          test -f RECOVERY.md
+
+      - name: Create full source ZIP and checksum from this repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          git archive --format=zip --output=LinkIt-Fork-Full-Source-Recovery.zip HEAD
+          sha256sum LinkIt-Fork-Full-Source-Recovery.zip > LinkIt-Fork-Full-Source-Recovery.zip.sha256
+          unzip -Z -1 LinkIt-Fork-Full-Source-Recovery.zip | grep -qx 'upstream/macos/Package.swift'
+          unzip -Z -1 LinkIt-Fork-Full-Source-Recovery.zip | grep -qx 'upstream/android/gradlew'
+          echo "Archive bytes: $(wc -c < LinkIt-Fork-Full-Source-Recovery.zip)"
+
+      - name: Create durable tagged GitHub recovery release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RECOVERY_TAG" >/dev/null 2>&1; then
+            echo 'Permanent recovery tag already exists; refusing to overwrite it'
+            exit 0
+          fi
+          cat > recovery-notes.md <<'EOF'
+          Recovery archive of the complete macOS and Android LinkIt source snapshot
+          plus this fork's patches, build workflows and recovery instructions.
+          
+          Based on upstream commit 4caea673f0fd827ba6ffb754895df9a7f0694dc8.
+          Both platform source trees are in the ZIP and on the Git tag.
+          This is a source recovery archive, not a signed Android production release.
+          Android signing keys, live device credentials, toolchains and third-party
+          downloaded build dependencies are deliberately not included.
+          EOF
+          gh release create "$RECOVERY_TAG" \
+            LinkIt-Fork-Full-Source-Recovery.zip \
+            LinkIt-Fork-Full-Source-Recovery.zip.sha256 \
+            --target "$GITHUB_SHA" \
+            --title 'LinkIt Fork: source recovery backup (Mac + Android)' \
+            --notes-file recovery-notes.md \
+            --latest=false
